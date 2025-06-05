@@ -1,17 +1,56 @@
 package com.example.mqttlistener
 
+import android.content.Context
 import android.os.Bundle
+import android.widget.Space
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import com.example.mqttlistener.ui.theme.MQTTListenerTheme
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -19,29 +58,210 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MQTTListenerTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
-                    )
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    BrokerListScreen()
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
+fun BrokerListScreen() {
+    val brokers = remember { mutableStateListOf<Broker>() }
+    var showAddBrokerDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text("Moi Brokerzy MQTT") })
+        },
+        floatingActionButton = {
+            FloatingActionButton(onClick = {
+                showAddBrokerDialog = true
+            }) {
+                Icon(Icons.Filled.Add, "Dodaj nowego brokera")
+            }
+        }
+    ) { paddingValues ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(8.dp)
+        ) {
+            items(brokers) { broker ->
+                BrokerListItem(broker = broker) { brokerToDelete ->
+                    brokers.remove(brokerToDelete)
+                    Toast.makeText(context, "Broker usuniety: ${brokerToDelete.address}:${brokerToDelete.port}${brokerToDelete.topic?.let { if (it.isNotBlank()) "/$it" else "" }}", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            if (brokers.isEmpty()) {
+                item {
+                    Text(
+                        "Brak brokerów. Kliknij '+', aby dodać!",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+
+                }
+            }
+        }
+
+        if (showAddBrokerDialog) {
+            AddBrokerDialog(
+                onDismiss = { showAddBrokerDialog = false },
+                onAddBroker = { address, port, topic ->
+                    val newBroker = Broker(UUID.randomUUID().toString(), address, port, topic.ifBlank { null })
+                    brokers.add(newBroker)
+                    showAddBrokerDialog = false
+                    Toast.makeText(context, "Broker dodany: ${address}:${port}${topic.let { if (it.isNotBlank()) "/$it" else "" }}", Toast.LENGTH_SHORT).show()
+                }
+            )
+        }
+    }
 }
+
+@Composable
+fun BrokerListItem(broker: Broker, onDeleteClick: (Broker) -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "${broker.address}:${broker.port}",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+
+                broker.topic?.let {
+                    Text(
+                        text = "Topic: ${it}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+
+            IconButton(onClick = {onDeleteClick(broker)}) {
+                Icon(
+                    imageVector = Icons.Filled.Delete,
+                    contentDescription = "Usuń broker",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AddBrokerDialog(onDismiss: () -> Unit, onAddBroker: (String, Int, String) -> Unit) {
+    var address by remember { mutableStateOf("") }
+    var port by remember { mutableStateOf("1883") }
+    var topic by remember { mutableStateOf("") }
+    val context = LocalContext.current
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card {
+            Column(
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Text(
+                    "Dodaj nowego brokera MQTT",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = address,
+                    onValueChange = {address = it},
+                    label = { Text("Adres brokera")},
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = port,
+                    onValueChange = { newValue ->
+                        if(newValue.all { it.isDigit()}){
+                            port = newValue
+                        }
+                    },
+                    label = { Text("Port")},
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = topic,
+                    onValueChange = { topic = it},
+                    label = { Text("Topic (opcjonalne)")},
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement =  Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Anuluj")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Button(
+                        onClick = {
+                            if (address.isNotBlank() && port.isNotBlank()){
+                                try {
+                                    val portInt = port.toInt()
+                                    onAddBroker(address, portInt, topic)
+                                } catch (e: NumberFormatException) {
+                                    Toast.makeText(context, "Nieprawidłowy numer portu", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                Toast.makeText(context, "Adres i port nie mogą być puste", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    ) {
+                        Text("Dodaj")
+                    }
+                }
+
+            }
+        }
+    }
+}
+
 
 @Preview(showBackground = true)
 @Composable
-fun GreetingPreview() {
+fun BrokerListScreenPreview() {
     MQTTListenerTheme {
-        Greeting("Android")
+        BrokerListScreen()
     }
 }
