@@ -34,12 +34,6 @@ class MqttService : Service() {
         return null // Service will not communicate with UI components
     }
 
-//    override fun onCreate() {
-//        super.onCreate()
-//        Log.d(TAG, "MqttService onCreate")
-//        createNotificationChannel()
-//    }
-
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "MqttService onStartCommand - Action: ${intent?.action}")
 
@@ -73,8 +67,7 @@ class MqttService : Service() {
             }
 
             ACTION_STOP_FOREGROUND -> {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopServiceIfNoClients()
             }
 
             else -> {
@@ -83,6 +76,13 @@ class MqttService : Service() {
         }
 
         return START_STICKY
+    }
+
+    private fun stopServiceIfNoClients() {
+        if (mqttClients.isEmpty()) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
     }
 
     override fun onDestroy() {
@@ -96,6 +96,7 @@ class MqttService : Service() {
                     client.disconnect()
                     Log.d(TAG, "Disconnected MQTT client: ${client.serverURI}")
                 }
+                client.close()
             } catch (e: MqttException) {
                 Log.e(
                     TAG,
@@ -116,10 +117,8 @@ class MqttService : Service() {
                 if (client.isConnected) {
                     client.disconnect(null, object : IMqttActionListener {
                         override fun onSuccess(asyncActionToken: IMqttToken?) {
-                            if (mqttClients.isEmpty()) {
-                                stopForeground(STOP_FOREGROUND_REMOVE)
-                                stopSelf()
-                            }
+                            client.close()
+                            stopServiceIfNoClients()
                             Log.d(TAG, "MQTT Client disconnected successfully for broker: $brokerId")
                         }
 
@@ -127,6 +126,8 @@ class MqttService : Service() {
                             asyncActionToken: IMqttToken?,
                             exception: Throwable?
                         ) {
+                            client.close()
+                            stopServiceIfNoClients()
                             Log.e(
                                 TAG,
                                 "MQTT Client disconnect failed for broker: $brokerId: ${exception?.message}"
@@ -134,18 +135,17 @@ class MqttService : Service() {
                         }
                     })
                 } else {
-                    if (mqttClients.isEmpty()) {
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                        stopSelf()
-                    }
+                    client.close()
+                    stopServiceIfNoClients()
                 }
-                client.close()
 
             } catch (e: MqttException) {
+                stopServiceIfNoClients()
                 Log.e(TAG, "Error disconnecting MQTT client for broker $brokerId: ${e.message}", e)
             }
 
         } else {
+            stopServiceIfNoClients()
             Log.d(TAG, "No active MQTT client found for broker ID: $brokerId to disconnect.")
         }
     }
@@ -154,8 +154,6 @@ class MqttService : Service() {
         val serverUri = "tcp://$address:$port"
         val clientId = MqttClient.generateClientId()
         val persistence = MemoryPersistence()
-
-        startForegroundService()
 
         if (mqttClients.containsKey(id) && mqttClients[id]?.isConnected == true) {
             Log.d(
@@ -198,6 +196,8 @@ class MqttService : Service() {
                 }
 
                 override fun connectionLost(cause: Throwable?) {
+                    mqttClients.remove(id)
+                    stopServiceIfNoClients()
                     Log.e(TAG, "MQTT Connection lost for broker $id: ${cause?.message}", cause)
                 }
 
@@ -223,41 +223,35 @@ class MqttService : Service() {
                         Toast.LENGTH_LONG
                     ).show()
                     mqttClients.remove(id)
-
-                    if (mqttClients.isEmpty()) {
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                        stopSelf()
-                    }
+                    stopServiceIfNoClients()
                 }
             })
 
         } catch (e: MqttException) {
             Log.e(TAG, "Error creating MQTT client for $address:$port", e)
             mqttClients.remove(id)
-
-            if (mqttClients.isEmpty()) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
+            stopServiceIfNoClients()
         }
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            NOTIFICATION_CHANNEL_ID,
-            NOTIFICATION_CHANNEL_NAME,
-            NotificationManager.IMPORTANCE_DEFAULT
-        ).apply {
-            description = "Powiadomienia o wiadomościach MQTT"
-        }
-
         val notificationManager: NotificationManager =
             getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.createNotificationChannel(channel)
+
+        if (notificationManager.getNotificationChannel(NOTIFICATION_CHANNEL_ID) == null) {
+            val channel = NotificationChannel(
+                NOTIFICATION_CHANNEL_ID,
+                NOTIFICATION_CHANNEL_NAME,
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Powiadomienia MQTT"
+                setShowBadge(false)
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
     }
 
     private fun sendNotification(title: String, message: String, notificationId: Int) {
-        createNotificationChannel()
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
@@ -283,6 +277,8 @@ class MqttService : Service() {
     }
 
     private fun startForegroundService() {
+        createNotificationChannel()
+
         val notification = createForegroundNotification()
         startForeground(
             1883,
