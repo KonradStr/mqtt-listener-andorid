@@ -43,10 +43,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +57,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.example.mqttlistener.ui.theme.MQTTListenerTheme
+import kotlinx.coroutines.launch
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
@@ -77,9 +80,11 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrokerListScreen() {
-    val brokers = remember { mutableStateListOf<Broker>() }
-    var showAddBrokerDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val brokerDao = remember { AppDatabase.getDatabase(context).brokerDao() }
+    val brokers by brokerDao.getAllBrokers().collectAsState(initial = emptyList())
+    var showAddBrokerDialog by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
 
     val notificationPermissionLauncher =
         rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestPermission()) { isGranted: Boolean ->
@@ -94,6 +99,12 @@ fun BrokerListScreen() {
                     .show()
             }
         }
+
+    LaunchedEffect(brokers) {
+        brokers.forEach {
+                broker -> startMqttService(context, broker)
+        }
+    }
 
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -123,13 +134,15 @@ fun BrokerListScreen() {
         ) {
             items(brokers) { broker ->
                 BrokerListItem(broker = broker) { brokerToDelete ->
-                    brokers.remove(brokerToDelete)
-                    stopMqttService(context, brokerToDelete.id)
-                    Toast.makeText(
-                        context,
-                        "Broker usuniety: ${brokerToDelete.address}:${brokerToDelete.port}/${brokerToDelete.topic}",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    coroutineScope.launch {
+                        brokerDao.delete(brokerToDelete)
+                        stopMqttService(context, brokerToDelete.id)
+                        Toast.makeText(
+                            context,
+                            "Broker usuniety: ${brokerToDelete.address}:${brokerToDelete.port}/${brokerToDelete.topic}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
                 }
             }
 
@@ -150,16 +163,18 @@ fun BrokerListScreen() {
             AddBrokerDialog(
                 onDismiss = { showAddBrokerDialog = false },
                 onAddBroker = { address, port, topic ->
-                    val newBroker =
-                        Broker(UUID.randomUUID().toString(), address, port, topic)
-                    brokers.add(newBroker)
-                    showAddBrokerDialog = false
-                    startMqttService(context, newBroker)
-                    Toast.makeText(
-                        context,
-                        "Broker dodany: ${address}:${port}/${topic}",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    coroutineScope.launch {
+                        val newBroker =
+                            Broker(UUID.randomUUID().toString(), address, port, topic)
+                        brokerDao.insert(newBroker)
+                        showAddBrokerDialog = false
+                        startMqttService(context, newBroker)
+                        Toast.makeText(
+                            context,
+                            "Broker dodany: ${address}:${port}/${topic}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
                 }
             )
         }
