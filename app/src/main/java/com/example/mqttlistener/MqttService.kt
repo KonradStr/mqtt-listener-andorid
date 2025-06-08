@@ -1,5 +1,6 @@
 package com.example.mqttlistener
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -25,14 +26,28 @@ class MqttService : Service() {
     companion object {
         const val ACTION_DISCONNECT_BROKER = "com.example.mqttlistener.ACTION_DISCONNECT_BROKER"
         const val ACTION_CONNECT_BROKER = "com.example.mqttlistener.ACTION_CONNECT_BROKER"
+        const val ACTION_START_FOREGROUND = "com.example.mqttlistener.ACTION_START_FOREGROUND"
+        const val ACTION_STOP_FOREGROUND = "com.example.mqttlistener.ACTION_STOP_FOREGROUND"
     }
 
     override fun onBind(intent: Intent?): IBinder? {
         return null // Service will not communicate with UI components
     }
 
+//    override fun onCreate() {
+//        super.onCreate()
+//        Log.d(TAG, "MqttService onCreate")
+//        createNotificationChannel()
+//    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "MqttService onStartCommand - Action: ${intent?.action}")
+
+        createNotificationChannel()
+
+        if (intent?.action == ACTION_START_FOREGROUND || !mqttClients.isEmpty()) {
+            startForegroundService()
+        }
 
         when (intent?.action) {
             ACTION_CONNECT_BROKER -> {
@@ -57,6 +72,11 @@ class MqttService : Service() {
                 }
             }
 
+            ACTION_STOP_FOREGROUND -> {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+
             else -> {
                 Log.d(TAG, "MqttService received unknown or null action: ${intent?.action}")
             }
@@ -67,6 +87,7 @@ class MqttService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopForeground(STOP_FOREGROUND_REMOVE)
         Log.d(TAG, "MqttService destroyed. Disconnecting all clients.")
 
         mqttClients.values.forEach { client ->
@@ -95,10 +116,11 @@ class MqttService : Service() {
                 if (client.isConnected) {
                     client.disconnect(null, object : IMqttActionListener {
                         override fun onSuccess(asyncActionToken: IMqttToken?) {
-                            Log.d(
-                                TAG,
-                                "MQTT Client disconnected successfully for broker: $brokerId"
-                            )
+                            if (mqttClients.isEmpty()) {
+                                stopForeground(STOP_FOREGROUND_REMOVE)
+                                stopSelf()
+                            }
+                            Log.d(TAG, "MQTT Client disconnected successfully for broker: $brokerId")
                         }
 
                         override fun onFailure(
@@ -111,6 +133,11 @@ class MqttService : Service() {
                             )
                         }
                     })
+                } else {
+                    if (mqttClients.isEmpty()) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    }
                 }
                 client.close()
 
@@ -127,6 +154,8 @@ class MqttService : Service() {
         val serverUri = "tcp://$address:$port"
         val clientId = MqttClient.generateClientId()
         val persistence = MemoryPersistence()
+
+        startForegroundService()
 
         if (mqttClients.containsKey(id) && mqttClients[id]?.isConnected == true) {
             Log.d(
@@ -175,7 +204,7 @@ class MqttService : Service() {
                 override fun messageArrived(topic: String?, message: MqttMessage?) {
                     val payload = String(message?.payload ?: ByteArray(0))
                     Log.d(TAG, "Message arrived from topic '$topic' for broker $id: $payload")
-                    sendNotification("MQTT from $topic", payload, id.hashCode())
+                    sendNotification("MQTT z ${address}:${port}/${topic}", payload, id.hashCode())
                 }
 
                 override fun deliveryComplete(token: IMqttDeliveryToken?) {}
@@ -194,12 +223,22 @@ class MqttService : Service() {
                         Toast.LENGTH_LONG
                     ).show()
                     mqttClients.remove(id)
+
+                    if (mqttClients.isEmpty()) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    }
                 }
             })
 
         } catch (e: MqttException) {
             Log.e(TAG, "Error creating MQTT client for $address:$port", e)
             mqttClients.remove(id)
+
+            if (mqttClients.isEmpty()) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
         }
     }
 
@@ -219,7 +258,6 @@ class MqttService : Service() {
 
     private fun sendNotification(title: String, message: String, notificationId: Int) {
         createNotificationChannel()
-
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
@@ -242,5 +280,36 @@ class MqttService : Service() {
         val notificationManager =
             getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(notificationId, notificationBuilder.build())
+    }
+
+    private fun startForegroundService() {
+        val notification = createForegroundNotification()
+        startForeground(
+            1883,
+            notification,
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        )
+
+    }
+
+    private fun createForegroundNotification(): Notification {
+        val notificationIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val pendingIntent: PendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            notificationIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle("Odbieranie wiadomości MQTT aktywne")
+            .setContentText("")
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentIntent(pendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .build()
     }
 }
